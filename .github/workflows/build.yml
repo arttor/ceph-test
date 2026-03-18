@@ -109,7 +109,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -148,3 +148,19 @@ jobs:
               ${{ steps.meta.outputs.amd64 }} \
               ${{ steps.meta.outputs.arm64 }}
           done
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          TAGS="${{ steps.meta.outputs.tags }}"
+          BODY="## Images (linux/amd64, linux/arm64)"
+          IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+          for tag in "${TAG_ARRAY[@]}"; do
+            BODY=$(printf '%s\n```\ndocker pull %s\n```' "$BODY" "$tag")
+          done
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "$TAG" \
+            --notes "$BODY"
