@@ -1,0 +1,150 @@
+name: Build and Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse tags
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          MAJOR=$(echo "$TAG" | grep -oE '^v[0-9]+')
+          MINOR=$(echo "$TAG" | grep -oE '^v[0-9]+\.[0-9]+')
+          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | tr '/' '-')
+
+          echo "ceph_version=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "platform_image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${TAG}-${PLATFORM_TAG}" >> "$GITHUB_OUTPUT"
+
+          # Full tag list (only used by merge job)
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}"
+          if [ -n "$MINOR" ] && [ "$MINOR" != "$TAG" ]; then
+            TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${MINOR}"
+          fi
+          if [ -n "$MAJOR" ] && [ "$MAJOR" != "$TAG" ] && [ "$MAJOR" != "$MINOR" ]; then
+            TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${MAJOR}"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (single platform)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.platform_image }}
+          build-args: |
+            CEPH_VERSION=${{ steps.meta.outputs.ceph_version }}
+
+      - name: Health check
+        run: |
+          docker run -d --name ceph-health-test \
+            -e CEPH_DEMO_ACCESS_KEY=testkey \
+            -e CEPH_DEMO_SECRET_KEY=testsecret \
+            ${{ steps.meta.outputs.platform_image }}
+
+          echo "Waiting for health (30s)..."
+          for i in $(seq 1 30); do
+            if docker exec ceph-health-test ceph health 2>/dev/null | grep -q "HEALTH"; then
+              echo "Healthy at +${i}s"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "FAILED: health not reached in 30s"
+              docker logs ceph-health-test
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "Checking S3 user..."
+          for i in $(seq 1 30); do
+            if docker exec ceph-health-test radosgw-admin user info --uid=demo 2>/dev/null | grep -q "demo"; then
+              echo "S3 ready at +${i}s"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "FAILED: S3 user not created in 30s"
+              docker logs ceph-health-test
+              exit 1
+            fi
+            sleep 1
+          done
+
+          docker rm -f ceph-health-test
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Parse tags
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          MAJOR=$(echo "$TAG" | grep -oE '^v[0-9]+')
+          MINOR=$(echo "$TAG" | grep -oE '^v[0-9]+\.[0-9]+')
+
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}"
+          if [ -n "$MINOR" ] && [ "$MINOR" != "$TAG" ]; then
+            TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${MINOR}"
+          fi
+          if [ -n "$MAJOR" ] && [ "$MAJOR" != "$TAG" ] && [ "$MAJOR" != "$MINOR" ]; then
+            TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${MAJOR}"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "amd64=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${TAG}-linux-amd64" >> "$GITHUB_OUTPUT"
+          echo "arm64=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${TAG}-linux-arm64" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multiarch manifest
+        run: |
+          IFS=',' read -ra TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
+          for tag in "${TAG_ARRAY[@]}"; do
+            docker buildx imagetools create -t "$tag" \
+              ${{ steps.meta.outputs.amd64 }} \
+              ${{ steps.meta.outputs.arm64 }}
+          done
