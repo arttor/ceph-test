@@ -136,5 +136,7 @@ docker build -t ceph-test:latest .
 With a specific Ceph version:
 
 ```bash
-docker build --build-arg CEPH_VERSION=v18 -t ceph-test:v18 .
+docker build --build-arg CEPH_VERSION=v20 -t ceph-test:v20 .
 ```
+
+Requires Ceph v19 or later (v18 segfaults during OSD mkfs in Docker build layers).
