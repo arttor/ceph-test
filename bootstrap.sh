@@ -24,7 +24,17 @@ auth service required = cephx
 auth client required = cephx
 mon allow pool delete = true
 mon max pg per osd = 500
-bluestore_block_size = 536870912
+bluestore_block_size = 2147483648
+osd_memory_target = 939524096
+osd_scrub_auto_repair = false
+osd_scrub_begin_hour = 0
+osd_scrub_end_hour = 0
+bluestore_cache_size_hdd = 67108864
+bluestore_cache_size_ssd = 67108864
+debug_osd = 0/0
+debug_bluestore = 0/0
+debug_rocksdb = 0/0
+debug_ms = 0/0
 
 [osd.0]
 osd data = /var/lib/ceph/osd/ceph-0
