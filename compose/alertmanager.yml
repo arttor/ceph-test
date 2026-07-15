@@ -1,0 +1,7 @@
+# Minimal Alertmanager config: accept everything, route to a null receiver.
+# The dashboard reads active alerts and manages silences regardless of receiver.
+route:
+  receiver: "null"
+
+receivers:
+  - name: "null"

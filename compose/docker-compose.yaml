@@ -1,0 +1,102 @@
+# ceph-test dashboard playground - metrics, Grafana graphs, and alerts.
+# Run from this directory:  docker compose up --build
+# See README.md in this directory for details.
+name: ceph-test-dashboard
+
+services:
+  ceph:
+    build:
+      context: ..
+      args:
+        CEPH_VERSION: v20.2.2
+    image: ghcr.io/arttor/ceph-test:v20
+    environment:
+      CEPH_DASHBOARD: "true"
+      CEPH_PROMETHEUS: "true"
+      # Fake orchestrator so the Hosts/Services/Physical-Disks pages work.
+      CEPH_TEST_ORCHESTRATOR: "true"
+      # Prometheus API for the dashboard's monitoring pages and native charts.
+      CEPH_PROMETHEUS_API_URL: "http://prometheus:9090"
+      # Alertmanager API for the dashboard's alerts/silences pages.
+      CEPH_ALERTMANAGER_API_URL: "http://alertmanager:9093"
+      # Backend URL the mgr uses to reach Grafana (Docker network name).
+      CEPH_GRAFANA_API_URL: "http://grafana:3000"
+      # Browser-facing URL for the iframe (published port on the host).
+      CEPH_GRAFANA_FRONTEND_API_URL: "http://localhost:3000"
+    ports:
+      - "8443:8443"   # dashboard
+      - "8080:8080"   # rgw (s3)
+      - "9283:9283"   # ceph prometheus exporter
+
+  # Second cluster for testing the dashboard's multi-cluster management.
+  # Started only with:  docker compose --profile multicluster up --build
+  # Onboard it from the first dashboard (Multi-Cluster > Manage Clusters):
+  #   URL:   http://ceph2:8443     (reached by the hub over the Docker network)
+  #   Login: admin / admin
+  # It gets its own fsid automatically (each container mkfs's at startup), so
+  # the multi-cluster view (which keys clusters by fsid) treats it as distinct.
+  ceph2:
+    profiles: ["multicluster"]
+    image: ghcr.io/arttor/ceph-test:v20
+    environment:
+      CEPH_DASHBOARD: "true"
+      CEPH_PROMETHEUS: "true"
+      CEPH_PROMETHEUS_API_URL: "http://prometheus:9090"
+    # No host ports: the hub reaches it in-network at http://ceph2:8443.
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ceph-prometheus-rules:/etc/prometheus/rules:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      ceph-assets:
+        condition: service_completed_successfully
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - "9100:9100"
+
+  # One-shot: copy the Ceph Grafana dashboards and Prometheus alert rules
+  # shipped inside the ceph image into volumes that Grafana and Prometheus use.
+  ceph-assets:
+    image: ghcr.io/arttor/ceph-test:v20
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        cp /etc/grafana/dashboards/ceph-dashboard/*.json /grafana-dashboards/
+        cp /etc/prometheus/ceph/ceph_default_alerts.yml /prometheus-rules/
+    volumes:
+      - ceph-grafana-dashboards:/grafana-dashboards
+      - ceph-prometheus-rules:/prometheus-rules
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      # Quieter logs (default is chatty "info").
+      GF_LOG_LEVEL: "warn"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ceph-grafana-dashboards:/var/lib/grafana/dashboards/ceph:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      ceph-assets:
+        condition: service_completed_successfully
+
+volumes:
+  ceph-grafana-dashboards:
+  ceph-prometheus-rules:

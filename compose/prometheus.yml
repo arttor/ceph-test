@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+
+# Ceph's own alert rules, copied out of the image into this path by the
+# "ceph-assets" service in docker-compose.yml.
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Ceph metrics from the mgr prometheus module (CEPH_PROMETHEUS=true).
+  - job_name: ceph
+    static_configs:
+      - targets: ["ceph:9283"]
+
+  # Host OS/hardware metrics (populates the Ceph host dashboards).
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]

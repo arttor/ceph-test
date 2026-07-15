@@ -10,14 +10,14 @@ RUN mkdir -p \
     /etc/ceph \
     /opt/ceph-fast
 
-# Pre-bake the entire cluster at build time:
-# keyrings, mon mkfs, osd mkfs — so runtime only starts daemons.
+# Bake fsid-independent keyrings + a ceph.conf template. The mkfs happens at
+# container start (entrypoint.sh), so each container gets its own fsid.
 COPY bootstrap.sh /opt/ceph-fast/bootstrap.sh
 RUN chmod +x /opt/ceph-fast/bootstrap.sh && /opt/ceph-fast/bootstrap.sh
 
 COPY entrypoint.sh /opt/ceph-fast/entrypoint.sh
 RUN chmod +x /opt/ceph-fast/entrypoint.sh
 
-EXPOSE 3300 6789 8080
+EXPOSE 3300 6789 8080 8443 9283
 
 ENTRYPOINT ["/opt/ceph-fast/entrypoint.sh"]
