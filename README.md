@@ -54,6 +54,12 @@ For a full dashboard playground (Prometheus + Grafana + Alertmanager, plus a mul
 | `CEPH_ALERTMANAGER_API_URL` | (empty) | Alertmanager URL the dashboard queries for its alerts and silences pages (e.g. `http://alertmanager:9093`) |
 | `CEPH_GRAFANA_API_URL` | (empty) | Grafana URL the mgr uses to verify embedded dashboards (e.g. `http://grafana:3000`). Setting it enables Grafana embedding |
 | `CEPH_GRAFANA_FRONTEND_API_URL` | (empty) | Grafana URL the browser uses for the iframe (e.g. `http://localhost:3000`). Falls back to `CEPH_GRAFANA_API_URL` |
+| `CEPH_DEVICE_CLASS` | (empty) | CRUSH device class to set on every OSD (e.g. `hdd`). If empty, OSDs keep no class and `ceph df detail` reports an empty `stats_by_class` |
+| `CEPH_CEPHFS` | `false` | Create a CephFS filesystem and start an MDS for it |
+| `CEPH_CEPHFS_NAME` | `cephfs` | Filesystem name |
+| `CEPH_RGW_SEED` | `false` | Create a bucket with a few objects in RGW (owned by `CEPH_DEMO_UID`, which is created with generated keys if it does not exist) |
+| `CEPH_RGW_SEED_BUCKET` | `seed-bucket` | Seeded bucket name |
+| `CEPH_RGW_SEED_OBJECTS` | `5` | Number of small objects written into the seeded bucket |
 
 Files placed in `/etc/ceph/ceph.conf.d/*.conf` are also appended to `ceph.conf` at startup — handy for injecting RGW Keystone or other settings via volume mounts or testcontainers file injection.
 

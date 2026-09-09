@@ -6,6 +6,7 @@ RUN mkdir -p \
     /var/lib/ceph/mgr/ceph-demo \
     /var/lib/ceph/osd/ceph-0 \
     /var/lib/ceph/radosgw/ceph-rgw.demo \
+    /var/lib/ceph/mds/ceph-demo \
     /var/run/ceph \
     /etc/ceph \
     /opt/ceph-fast

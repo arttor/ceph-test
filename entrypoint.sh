@@ -16,6 +16,12 @@ set -e
 : "${CEPH_ALERTMANAGER_API_URL:=}"
 : "${CEPH_GRAFANA_API_URL:=}"
 : "${CEPH_GRAFANA_FRONTEND_API_URL:=}"
+: "${CEPH_DEVICE_CLASS:=}"
+: "${CEPH_CEPHFS:=false}"
+: "${CEPH_CEPHFS_NAME:=cephfs}"
+: "${CEPH_RGW_SEED:=false}"
+: "${CEPH_RGW_SEED_BUCKET:=seed-bucket}"
+: "${CEPH_RGW_SEED_OBJECTS:=5}"
 : "${CEPH_FSID:=}"
 
 if [ "$MON_IP" = "0.0.0.0" ]; then
@@ -29,7 +35,8 @@ echo "MON_IP=$ACTUAL_IP  NETWORK=$CEPH_PUBLIC_NETWORK"
 
 # Data/config dirs may be empty volume mounts - make sure they exist.
 mkdir -p /var/lib/ceph/mon/ceph-demo /var/lib/ceph/mgr/ceph-demo \
-    /var/lib/ceph/osd/ceph-0 /var/lib/ceph/radosgw/ceph-rgw.demo /var/run/ceph /etc/ceph
+    /var/lib/ceph/osd/ceph-0 /var/lib/ceph/radosgw/ceph-rgw.demo \
+    /var/lib/ceph/mds/ceph-demo /var/run/ceph /etc/ceph
 chown ceph: /var/run/ceph
 
 # Restore baked keyrings + ceph.conf if /etc/ceph is empty (fresh or empty volume).
@@ -124,6 +131,51 @@ for i in $(seq 1 60); do
     sleep 1
 done
 
+# --- Set a CRUSH device class on every OSD ---
+# Without it `ceph osd tree` shows no class and `ceph df detail` reports an
+# empty stats_by_class, so per-class collectors see nothing.
+if [ -n "$CEPH_DEVICE_CLASS" ]; then
+    echo "Setting CRUSH device class ${CEPH_DEVICE_CLASS} on OSDs..."
+    OSDS=""
+    for i in $(seq 1 30); do
+        OSDS=$(ceph osd ls 2>/dev/null || true)
+        UP=$(ceph osd stat -f json 2>/dev/null | grep -o '"num_up_osds":[0-9]*' | cut -d: -f2)
+        if [ -n "$OSDS" ] && [ "${UP:-0}" -gt 0 ]; then
+            break
+        fi
+        sleep 1
+    done
+    for osd in $OSDS; do
+        # An OSD already bound to another class rejects set-device-class.
+        ceph osd crush rm-device-class "osd.${osd}" >/dev/null 2>&1 || true
+        ceph osd crush set-device-class "$CEPH_DEVICE_CLASS" "osd.${osd}"
+    done
+fi
+
+# --- Create a CephFS filesystem ---
+# `ceph fs volume create` only creates the pools and the fs here ("no MDS
+# daemons created"): spawning the MDS needs an orchestrator, which this image
+# does not run, so the mds daemon is started by hand like mon/mgr/osd/rgw.
+if [ "$CEPH_CEPHFS" = "true" ] || [ "$CEPH_CEPHFS" = "1" ]; then
+    echo "Creating CephFS ${CEPH_CEPHFS_NAME}..."
+    ceph fs volume create "$CEPH_CEPHFS_NAME"
+
+    ceph auth get-or-create mds.demo mon 'profile mds' mgr 'profile mds' \
+        mds 'allow *' osd 'allow *' -o /var/lib/ceph/mds/ceph-demo/keyring
+    chown -R ceph: /var/lib/ceph/mds/ceph-demo
+
+    echo "Starting mds..."
+    ceph-mds --cluster ceph -i demo --setuser ceph --setgroup ceph &
+
+    for i in $(seq 1 60); do
+        if ceph fs status "$CEPH_CEPHFS_NAME" 2>/dev/null | grep -q active; then
+            echo "CephFS ${CEPH_CEPHFS_NAME} active."
+            break
+        fi
+        sleep 1
+    done
+fi
+
 # --- Create S3 demo user ---
 if [ -n "$CEPH_DEMO_ACCESS_KEY" ] && [ -n "$CEPH_DEMO_SECRET_KEY" ]; then
     echo "Creating S3 demo user..."
@@ -137,6 +189,54 @@ if [ -n "$CEPH_DEMO_ACCESS_KEY" ] && [ -n "$CEPH_DEMO_SECRET_KEY" ]; then
                 --caps="buckets=*;users=*;usage=*;metadata=*" \
                 --uid="$CEPH_DEMO_UID" 2>/dev/null || true
             echo "S3 user created."
+            break
+        fi
+        sleep 1
+    done
+fi
+
+# --- Seed RGW with a bucket and a few objects ---
+# radosgw-admin cannot write objects and the image ships no S3 client, so the
+# objects go in over the S3 API with a v2 signature (openssl + curl, both
+# already present). Uses the demo user, creating it if it does not exist yet.
+if [ "$CEPH_RGW_SEED" = "true" ] || [ "$CEPH_RGW_SEED" = "1" ]; then
+    echo "Seeding RGW (user ${CEPH_DEMO_UID}, bucket ${CEPH_RGW_SEED_BUCKET})..."
+    radosgw-admin user info --uid="$CEPH_DEMO_UID" >/dev/null 2>&1 \
+        || radosgw-admin user create --uid="$CEPH_DEMO_UID" \
+            --display-name="Ceph demo user" >/dev/null
+    S3_KEYS=$(radosgw-admin user info --uid="$CEPH_DEMO_UID" --format=json 2>/dev/null \
+        | python3 -c 'import json,sys; k=json.load(sys.stdin)["keys"][0]; print(k["access_key"], k["secret_key"])')
+    S3_ACCESS=${S3_KEYS% *}
+    S3_SECRET=${S3_KEYS#* }
+
+    s3_put() { # <path> <content-type> [curl args...]
+        local path=$1 ctype=$2 now sig
+        shift 2
+        now=$(date -R -u)
+        sig=$(printf '%s\n\n%s\n%s\n%s' PUT "$ctype" "$now" "$path" \
+            | openssl sha1 -hmac "$S3_SECRET" -binary | base64)
+        curl -sS -o /dev/null -X PUT -H "Date: ${now}" -H "Content-Type: ${ctype}" \
+            -H "Authorization: AWS ${S3_ACCESS}:${sig}" "$@" \
+            "http://127.0.0.1:8080${path}"
+    }
+
+    for i in $(seq 1 30); do
+        if curl -s -o /dev/null http://127.0.0.1:8080; then
+            break
+        fi
+        sleep 1
+    done
+
+    s3_put "/${CEPH_RGW_SEED_BUCKET}" ""
+    for i in $(seq 1 "$CEPH_RGW_SEED_OBJECTS"); do
+        printf 'ceph-test seed object %s\n' "$i" \
+            | s3_put "/${CEPH_RGW_SEED_BUCKET}/seed-${i}.txt" text/plain --data-binary @-
+    done
+
+    for i in $(seq 1 30); do
+        if radosgw-admin bucket stats --bucket="$CEPH_RGW_SEED_BUCKET" 2>/dev/null \
+            | grep -q '"num_objects": [1-9]'; then
+            echo "RGW seeded: ${CEPH_RGW_SEED_OBJECTS} objects in ${CEPH_RGW_SEED_BUCKET}."
             break
         fi
         sleep 1
