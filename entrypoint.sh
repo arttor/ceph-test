@@ -157,6 +157,20 @@ fi
 # daemons created"): spawning the MDS needs an orchestrator, which this image
 # does not run, so the mds daemon is started by hand like mon/mgr/osd/rgw.
 if [ "$CEPH_CEPHFS" = "true" ] || [ "$CEPH_CEPHFS" = "1" ]; then
+    # `fs volume create` belongs to the mgr's volumes module: the mon only
+    # accepts it once the active mgr has registered its module commands, which
+    # lags the health loop above (that one only proves the mon). Run it too
+    # early - as a slow CI runner does - and the mon answers "no valid command
+    # found" / EINVAL and set -e kills the container.
+    echo "Waiting for mgr module commands..."
+    for i in $(seq 1 60); do
+        if ceph mgr stat 2>/dev/null | grep -q '"available": *true' \
+            && ceph fs volume ls >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+
     echo "Creating CephFS ${CEPH_CEPHFS_NAME}..."
     ceph fs volume create "$CEPH_CEPHFS_NAME"
 
