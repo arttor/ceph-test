@@ -69,39 +69,38 @@ jobs:
             CEPH_VERSION=${{ steps.meta.outputs.ceph_version }}
 
       - name: Health check
+        # Backstop: the waits below give up after 5 min each.
+        timeout-minutes: 15
         run: |
           docker run -d --name ceph-health-test \
             -e CEPH_DEMO_ACCESS_KEY=testkey \
             -e CEPH_DEMO_SECRET_KEY=testsecret \
             ${{ steps.meta.outputs.platform_image }}
 
-          echo "Waiting for health (30s)..."
-          for i in $(seq 1 30); do
-            if docker exec ceph-health-test ceph health 2>/dev/null | grep -q "HEALTH"; then
-              echo "Healthy at +${i}s"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "FAILED: health not reached in 30s"
-              docker logs ceph-health-test
-              exit 1
-            fi
-            sleep 1
-          done
+          # wait_for <description> <command...>: retry until the command
+          # succeeds or WAIT_SECS pass. Each attempt is capped at 10s, since
+          # ceph/radosgw-admin block forever when the cluster cannot serve them.
+          WAIT_SECS=300
+          wait_for() {
+            local what=$1 start=$SECONDS
+            shift
+            echo "Waiting for ${what} (up to ${WAIT_SECS}s)..."
+            until timeout 10 "$@" >/dev/null 2>&1; do
+              if [ $((SECONDS - start)) -ge "$WAIT_SECS" ]; then
+                echo "FAILED: ${what} not reached in ${WAIT_SECS}s"
+                docker logs ceph-health-test
+                exit 1
+              fi
+              sleep 2
+            done
+            echo "${what} ready at +$((SECONDS - start))s"
+          }
 
-          echo "Checking S3 user..."
-          for i in $(seq 1 30); do
-            if docker exec ceph-health-test radosgw-admin user info --uid=demo 2>/dev/null | grep -q "demo"; then
-              echo "S3 ready at +${i}s"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "FAILED: S3 user not created in 30s"
-              docker logs ceph-health-test
-              exit 1
-            fi
-            sleep 1
-          done
+          wait_for "cluster health" docker exec ceph-health-test ceph health
+          wait_for "OSD up" sh -c \
+            'docker exec ceph-health-test ceph osd stat | grep -q " 1 up"'
+          wait_for "S3 user" docker exec ceph-health-test \
+            radosgw-admin user info --uid=demo
 
           docker rm -f ceph-health-test
 

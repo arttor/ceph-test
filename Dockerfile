@@ -1,5 +1,9 @@
 ARG CEPH_VERSION=v19
 FROM quay.io/ceph/ceph:${CEPH_VERSION}
+ARG CEPH_VERSION
+
+# Image name the test orchestrator reports for the daemons (orch_data.py).
+ENV CEPH_TEST_ORCHESTRATOR_IMAGE=quay.io/ceph/ceph:${CEPH_VERSION}
 
 RUN mkdir -p \
     /var/lib/ceph/mon/ceph-demo \
@@ -16,7 +20,7 @@ RUN mkdir -p \
 COPY bootstrap.sh /opt/ceph-fast/bootstrap.sh
 RUN chmod +x /opt/ceph-fast/bootstrap.sh && /opt/ceph-fast/bootstrap.sh
 
-COPY entrypoint.sh /opt/ceph-fast/entrypoint.sh
+COPY entrypoint.sh orch_data.py /opt/ceph-fast/
 RUN chmod +x /opt/ceph-fast/entrypoint.sh
 
 EXPOSE 3300 6789 8080 8443 9283

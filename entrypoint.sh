@@ -12,6 +12,9 @@ set -e
 : "${CEPH_DASHBOARD_PASSWORD:=admin}"
 : "${CEPH_PROMETHEUS:=false}"
 : "${CEPH_TEST_ORCHESTRATOR:=false}"
+: "${CEPH_TEST_ORCHESTRATOR_DATA:=}"
+: "${CEPH_TEST_ORCHESTRATOR_IMAGE:=}"
+: "${CEPH_TEST_ORCHESTRATOR_IMAGE_ID:=}"
 : "${CEPH_PROMETHEUS_API_URL:=}"
 : "${CEPH_ALERTMANAGER_API_URL:=}"
 : "${CEPH_GRAFANA_API_URL:=}"
@@ -97,6 +100,11 @@ if [ "$FRESH" = "1" ]; then
     ceph-osd --conf /etc/ceph/ceph.conf --osd-data /var/lib/ceph/osd/ceph-0 --mkfs -i 0
     echo "bluestore" > /var/lib/ceph/osd/ceph-0/type
     chown -R ceph: /var/lib/ceph/osd/ceph-0
+    # Register osd.0 in the osdmap before it starts, as ceph-volume does.
+    # Otherwise the OSD's own fallback ("osd create", then retry the crush
+    # create-or-move) runs, and on v21 that retry sends an empty command
+    # (moved-from string) - the OSD exits with "unparseable JSON".
+    ceph osd new "$(cat /var/lib/ceph/osd/ceph-0/fsid)" 0 >/dev/null
     ceph auth get-or-create client.rgw.demo mon 'allow rw' osd 'allow rwx' \
         -o /var/lib/ceph/radosgw/ceph-rgw.demo/keyring
     chown -R ceph: /var/lib/ceph/radosgw/ceph-rgw.demo
@@ -211,8 +219,9 @@ fi
 
 # --- Seed RGW with a bucket and a few objects ---
 # radosgw-admin cannot write objects and the image ships no S3 client, so the
-# objects go in over the S3 API with a v2 signature (openssl + curl, both
-# already present). Uses the demo user, creating it if it does not exist yet.
+# objects go in over the S3 API with a v2 signature (python3 + curl, both
+# already present; v21+ images ship no openssl CLI). Uses the demo user,
+# creating it if it does not exist yet.
 if [ "$CEPH_RGW_SEED" = "true" ] || [ "$CEPH_RGW_SEED" = "1" ]; then
     echo "Seeding RGW (user ${CEPH_DEMO_UID}, bucket ${CEPH_RGW_SEED_BUCKET})..."
     radosgw-admin user info --uid="$CEPH_DEMO_UID" >/dev/null 2>&1 \
@@ -228,7 +237,9 @@ if [ "$CEPH_RGW_SEED" = "true" ] || [ "$CEPH_RGW_SEED" = "1" ]; then
         shift 2
         now=$(date -R -u)
         sig=$(printf '%s\n\n%s\n%s\n%s' PUT "$ctype" "$now" "$path" \
-            | openssl sha1 -hmac "$S3_SECRET" -binary | base64)
+            | S3_SECRET="$S3_SECRET" python3 -c 'import base64,hashlib,hmac,os,sys
+print(base64.b64encode(hmac.new(os.environ["S3_SECRET"].encode(),
+    sys.stdin.buffer.read(), hashlib.sha1).digest()).decode())')
         curl -sS -o /dev/null -X PUT -H "Date: ${now}" -H "Content-Type: ${ctype}" \
             -H "Authorization: AWS ${S3_ACCESS}:${sig}" "$@" \
             "http://127.0.0.1:8080${path}"
@@ -359,6 +370,74 @@ if [ "$CEPH_DASHBOARD" = "true" ] || [ "$CEPH_DASHBOARD" = "1" ]; then
     done
 
     set -e
+fi
+
+# --- Load test_orchestrator data ---
+# Replaces test_orchestrator's guesses (host "localhost", status unknown, no
+# RGW, failing "orch device ls") with data the orch commands return as-is:
+# CEPH_TEST_ORCHESTRATOR_DATA (a file path or inline JSON) if set, otherwise
+# generated from the daemons running here (orch_data.py).
+# The module keeps the data only in memory, and the mgr respawns whenever the
+# set of enabled modules changes (as the prometheus/dashboard steps above do),
+# so it is loaded last and re-loaded by a background loop whenever the active
+# mgr changes.
+if [ "$CEPH_TEST_ORCHESTRATOR" = "true" ] || [ "$CEPH_TEST_ORCHESTRATOR" = "1" ]; then
+    ORCH_DATA=/var/run/ceph/orch_data.json
+    orch_data_write() {
+        if [ -z "$CEPH_TEST_ORCHESTRATOR_DATA" ]; then
+            ORCH_HOST=$(hostname) ORCH_IP=$ACTUAL_IP CEPH_CEPHFS_NAME=$CEPH_CEPHFS_NAME \
+                CEPH_DEVICE_CLASS=$CEPH_DEVICE_CLASS CEPH_DASHBOARD=$CEPH_DASHBOARD \
+                CEPH_DASHBOARD_PORT=$CEPH_DASHBOARD_PORT CEPH_PROMETHEUS=$CEPH_PROMETHEUS \
+                CEPH_TEST_ORCHESTRATOR_IMAGE=$CEPH_TEST_ORCHESTRATOR_IMAGE \
+                CEPH_TEST_ORCHESTRATOR_IMAGE_ID=$CEPH_TEST_ORCHESTRATOR_IMAGE_ID \
+                python3 /opt/ceph-fast/orch_data.py > "$ORCH_DATA"
+        elif [ -f "$CEPH_TEST_ORCHESTRATOR_DATA" ]; then
+            cp "$CEPH_TEST_ORCHESTRATOR_DATA" "$ORCH_DATA"
+        else
+            printf '%s' "$CEPH_TEST_ORCHESTRATOR_DATA" > "$ORCH_DATA"
+        fi
+    }
+    mgr_gid() {
+        ceph mgr dump -f json 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["active_gid"])' \
+            2>/dev/null || true
+    }
+
+    if [ -n "$CEPH_TEST_ORCHESTRATOR_DATA" ]; then
+        echo "Loading test_orchestrator data from CEPH_TEST_ORCHESTRATOR_DATA..."
+    else
+        echo "Loading test_orchestrator data generated from running daemons..."
+    fi
+    for i in $(seq 1 30); do
+        if ceph orch status 2>/dev/null | grep -q "Available: Yes"; then
+            break
+        fi
+        sleep 1
+    done
+    ORCH_GID=$(mgr_gid)
+    # Not silenced: a bad user-supplied file must fail the container loudly,
+    # generated data is best-effort.
+    if ! { orch_data_write && ceph test_orchestrator load_data -i "$ORCH_DATA" >/dev/null; }; then
+        if [ -n "$CEPH_TEST_ORCHESTRATOR_DATA" ]; then
+            echo "FAILED: could not load CEPH_TEST_ORCHESTRATOR_DATA" >&2
+            exit 1
+        fi
+        echo "WARNING: could not load generated test_orchestrator data" >&2
+        ORCH_GID=""
+    fi
+
+    (
+        loaded=$ORCH_GID
+        while true; do
+            sleep 5
+            gid=$(mgr_gid)
+            if [ -n "$gid" ] && [ "$gid" != "$loaded" ] \
+                && orch_data_write 2>/dev/null \
+                && ceph test_orchestrator load_data -i "$ORCH_DATA" >/dev/null 2>&1; then
+                loaded=$gid
+            fi
+        done
+    ) &
 fi
 
 echo "=== ceph-test ready ==="

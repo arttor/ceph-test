@@ -49,7 +49,10 @@ For a full dashboard playground (Prometheus + Grafana + Alertmanager, plus a mul
 | `CEPH_DASHBOARD_USER` | `admin` | Dashboard admin username |
 | `CEPH_DASHBOARD_PASSWORD` | `admin` | Dashboard admin password (password policy is disabled) |
 | `CEPH_PROMETHEUS` | `false` | Enable the mgr `prometheus` module (exporter on port 9283) |
-| `CEPH_TEST_ORCHESTRATOR` | `false` | Enable Ceph's `test_orchestrator` backend so orchestrator-gated dashboard pages (Hosts, Services, Physical Disks) render. Data is synthetic; actions are no-ops |
+| `CEPH_TEST_ORCHESTRATOR` | `false` | Enable Ceph's `test_orchestrator` backend so `ceph orch` read commands and orchestrator dashboard pages (Hosts, Services, Physical Disks) work. Actions are no-ops. See [Orchestrator](#orchestrator) |
+| `CEPH_TEST_ORCHESTRATOR_DATA` | (empty) | Custom orchestrator data: a path to a JSON file or inline JSON |
+| `CEPH_TEST_ORCHESTRATOR_IMAGE` | `quay.io/ceph/ceph:<CEPH_VERSION>` | Image name reported for daemons |
+| `CEPH_TEST_ORCHESTRATOR_IMAGE_ID` | (empty) | Image ID reported for daemons, e.g. `$(docker image inspect -f '{{.Id}}' <image>)` |
 | `CEPH_PROMETHEUS_API_URL` | (empty) | Prometheus URL the dashboard queries for its monitoring pages and native charts (e.g. `http://prometheus:9090`) |
 | `CEPH_ALERTMANAGER_API_URL` | (empty) | Alertmanager URL the dashboard queries for its alerts and silences pages (e.g. `http://alertmanager:9093`) |
 | `CEPH_GRAFANA_API_URL` | (empty) | Grafana URL the mgr uses to verify embedded dashboards (e.g. `http://grafana:3000`). Setting it enables Grafana embedding |
@@ -62,6 +65,40 @@ For a full dashboard playground (Prometheus + Grafana + Alertmanager, plus a mul
 | `CEPH_RGW_SEED_OBJECTS` | `5` | Number of small objects written into the seeded bucket |
 
 Files placed in `/etc/ceph/ceph.conf.d/*.conf` are also appended to `ceph.conf` at startup — handy for injecting RGW Keystone or other settings via volume mounts or testcontainers file injection.
+
+## Orchestrator
+
+With `CEPH_TEST_ORCHESTRATOR=true`, `ceph orch` commands report the daemons running in the container. Set the host name with `--hostname`.
+
+To emulate a different cluster (e.g. several hosts), pass your own data:
+
+```bash
+docker run -d --name ceph \
+  -e CEPH_TEST_ORCHESTRATOR=true \
+  -e CEPH_TEST_ORCHESTRATOR_DATA=/etc/ceph-orch/data.json \
+  -v $(pwd)/orch-data.json:/etc/ceph-orch/data.json:ro \
+  ghcr.io/arttor/ceph-test:v20
+```
+
+The format is the one `ceph test_orchestrator load_data` accepts: `inventory` (hosts and devices), `services` and `daemons` lists. See the upstream [`dummy_data.json`](https://github.com/ceph/ceph/blob/main/src/pybind/mgr/test_orchestrator/dummy_data.json) for a full example.
+
+```json
+{
+  "inventory": [
+    {"name": "node1", "addr": "10.0.0.1", "labels": ["_admin"],
+     "devices": [{"path": "/dev/vdb", "available": true,
+                  "sys_api": {"size": 107374182400, "rotational": "0"}}]}
+  ],
+  "services": [
+    {"service_type": "rgw", "service_id": "s3", "placement": {"hosts": ["node1"]},
+     "status": {"size": 1, "running": 1}}
+  ],
+  "daemons": [
+    {"daemon_type": "rgw", "daemon_id": "s3.node1.abc", "hostname": "node1",
+     "service_name": "rgw.s3", "status": 1, "status_desc": "running", "version": "20.2.4"}
+  ]
+}
+```
 
 ## Ports
 
