@@ -2,6 +2,8 @@
 
 Single-node Ceph cluster (mon + mgr + osd + rgw) in one container, for testing. Based on `quay.io/ceph/ceph`. Multiarch: `linux/amd64` and `linux/arm64`.
 
+> **v21 on amd64 needs an x86-64-v3 CPU (AVX2).** Ceph's v21 images are built on Rocky Linux 10, which requires it, so on older x86 CPUs and some emulators (e.g. Rosetta, some shared CI runners) the container exits with `Fatal glibc error: CPU does not support x86-64-v3`. v19 and v20, and arm64, are not affected. Upstream: [ceph/ceph#72075](https://github.com/ceph/ceph/pull/72075).
+
 ## Usage
 
 ```bash

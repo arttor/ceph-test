@@ -377,10 +377,10 @@ fi
 # RGW, failing "orch device ls") with data the orch commands return as-is:
 # CEPH_TEST_ORCHESTRATOR_DATA (a file path or inline JSON) if set, otherwise
 # generated from the daemons running here (orch_data.py).
-# The module keeps the data only in memory, and the mgr respawns whenever the
-# set of enabled modules changes (as the prometheus/dashboard steps above do),
-# so it is loaded last and re-loaded by a background loop whenever the active
-# mgr changes.
+# The mgr respawns whenever the set of enabled modules changes (as the
+# prometheus/dashboard steps above do) and the module keeps load_data data only
+# in memory, so the image patches it to read $ORCH_DATA when it starts
+# (patch_test_orchestrator.py); load_data here is for the mgr already running.
 if [ "$CEPH_TEST_ORCHESTRATOR" = "true" ] || [ "$CEPH_TEST_ORCHESTRATOR" = "1" ]; then
     ORCH_DATA=/var/run/ceph/orch_data.json
     orch_data_write() {
@@ -397,12 +397,6 @@ if [ "$CEPH_TEST_ORCHESTRATOR" = "true" ] || [ "$CEPH_TEST_ORCHESTRATOR" = "1" ]
             printf '%s' "$CEPH_TEST_ORCHESTRATOR_DATA" > "$ORCH_DATA"
         fi
     }
-    mgr_gid() {
-        ceph mgr dump -f json 2>/dev/null \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["active_gid"])' \
-            2>/dev/null || true
-    }
-
     if [ -n "$CEPH_TEST_ORCHESTRATOR_DATA" ]; then
         echo "Loading test_orchestrator data from CEPH_TEST_ORCHESTRATOR_DATA..."
     else
@@ -414,7 +408,6 @@ if [ "$CEPH_TEST_ORCHESTRATOR" = "true" ] || [ "$CEPH_TEST_ORCHESTRATOR" = "1" ]
         fi
         sleep 1
     done
-    ORCH_GID=$(mgr_gid)
     # Not silenced: a bad user-supplied file must fail the container loudly,
     # generated data is best-effort.
     if ! { orch_data_write && ceph test_orchestrator load_data -i "$ORCH_DATA" >/dev/null; }; then
@@ -423,21 +416,7 @@ if [ "$CEPH_TEST_ORCHESTRATOR" = "true" ] || [ "$CEPH_TEST_ORCHESTRATOR" = "1" ]
             exit 1
         fi
         echo "WARNING: could not load generated test_orchestrator data" >&2
-        ORCH_GID=""
     fi
-
-    (
-        loaded=$ORCH_GID
-        while true; do
-            sleep 5
-            gid=$(mgr_gid)
-            if [ -n "$gid" ] && [ "$gid" != "$loaded" ] \
-                && orch_data_write 2>/dev/null \
-                && ceph test_orchestrator load_data -i "$ORCH_DATA" >/dev/null 2>&1; then
-                loaded=$gid
-            fi
-        done
-    ) &
 fi
 
 echo "=== ceph-test ready ==="

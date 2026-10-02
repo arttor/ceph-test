@@ -20,8 +20,9 @@ RUN mkdir -p \
 COPY bootstrap.sh /opt/ceph-fast/bootstrap.sh
 RUN chmod +x /opt/ceph-fast/bootstrap.sh && /opt/ceph-fast/bootstrap.sh
 
-COPY entrypoint.sh orch_data.py /opt/ceph-fast/
-RUN chmod +x /opt/ceph-fast/entrypoint.sh
+COPY entrypoint.sh orch_data.py patch_test_orchestrator.py /opt/ceph-fast/
+RUN chmod +x /opt/ceph-fast/entrypoint.sh \
+    && python3 /opt/ceph-fast/patch_test_orchestrator.py
 
 EXPOSE 3300 6789 8080 8443 9283
 
