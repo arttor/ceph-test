@@ -20,9 +20,17 @@ RUN mkdir -p \
 COPY bootstrap.sh /opt/ceph-fast/bootstrap.sh
 RUN chmod +x /opt/ceph-fast/bootstrap.sh && /opt/ceph-fast/bootstrap.sh
 
-COPY entrypoint.sh orch_data.py patch_test_orchestrator.py /opt/ceph-fast/
-RUN chmod +x /opt/ceph-fast/entrypoint.sh \
+COPY entrypoint.sh ceph-test-health orch_data.py patch_test_orchestrator.py /opt/ceph-fast/
+RUN chmod +x /opt/ceph-fast/entrypoint.sh /opt/ceph-fast/ceph-test-health \
+    && ln -s /opt/ceph-fast/ceph-test-health /usr/local/bin/ceph-test-health \
     && python3 /opt/ceph-fast/patch_test_orchestrator.py
+
+# Healthy once mon, mgr and osd are up: the "=== ceph-test ready ===" line.
+# The check only reads a marker file, so it is cheap enough to poll every
+# second while starting. The start period covers a slow machine: failures in
+# it do not count, and the entrypoint itself fails the container on timeout.
+HEALTHCHECK --interval=5s --timeout=10s --start-period=10m --start-interval=1s --retries=3 \
+    CMD ["ceph-test-health"]
 
 EXPOSE 3300 6789 8080 8443 9283
 
