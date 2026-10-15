@@ -20,6 +20,7 @@ set -e
 : "${CEPH_GRAFANA_API_URL:=}"
 : "${CEPH_GRAFANA_FRONTEND_API_URL:=}"
 : "${CEPH_DEVICE_CLASS:=}"
+: "${CEPH_RBD_POOL:=}"
 : "${CEPH_CEPHFS:=false}"
 : "${CEPH_CEPHFS_NAME:=cephfs}"
 : "${CEPH_RGW_SEED:=false}"
@@ -42,11 +43,11 @@ mkdir -p /var/lib/ceph/mon/ceph-demo /var/lib/ceph/mgr/ceph-demo \
     /var/lib/ceph/mds/ceph-demo /var/run/ceph /etc/ceph
 chown ceph: /var/run/ceph
 
-# Restore baked keyrings + ceph.conf if /etc/ceph is empty (fresh or empty volume).
+# Restore baked keyrings if /etc/ceph is empty (fresh or empty volume).
+# chown only the keyrings: /etc/ceph may hold read-only mounts (ceph.conf.d).
 if [ ! -f /etc/ceph/ceph.client.admin.keyring ]; then
     cp /opt/ceph-fast/keyring-backup/* /etc/ceph/
-    cp /opt/ceph-fast/ceph.conf.baked /etc/ceph/ceph.conf
-    chown -R ceph: /etc/ceph
+    chown ceph: /etc/ceph/*.keyring
 fi
 
 # Decide fresh mkfs vs start an existing cluster (e.g. persisted data volume).
@@ -60,20 +61,32 @@ else
     echo "Initializing new cluster (fsid ${FSID})."
 fi
 
-# --- ceph.conf: set fsid, real mon IP, public network ---
-sed -i "s|^fsid = .*|fsid = ${FSID}|" /etc/ceph/ceph.conf
-sed -i "s|^mon host = .*|mon host = v2:${ACTUAL_IP}:3300/0|" /etc/ceph/ceph.conf
-sed -i "s|^public network = .*|public network = ${CEPH_PUBLIC_NETWORK}|" /etc/ceph/ceph.conf
+# --- ceph.conf: rebuilt from the baked template on every start ---
+# Reusing the previous start's file (persisted /etc/ceph) would pile up the
+# extra config appended below, and settings removed from CEPH_EXTRA_CONF would
+# stick. Built aside and moved into place in one step, so a client sharing
+# /etc/ceph never reads a half-written file.
+CONF_NEW=/etc/ceph/.ceph.conf.new
+cp /opt/ceph-fast/ceph.conf.baked "$CONF_NEW"
+sed -i -e "s|^fsid = .*|fsid = ${FSID}|" \
+    -e "s|^mon host = .*|mon host = v2:${ACTUAL_IP}:3300/0|" \
+    -e "s|^public network = .*|public network = ${CEPH_PUBLIC_NETWORK}|" "$CONF_NEW"
 
 # --- Append extra config if provided (e.g. Keystone RGW settings) ---
+# The baked file ends in [client.rgw.demo], so each snippet is opened with
+# [global]: lines before the snippet's own section header (or a snippet with
+# none) apply cluster-wide instead of only to RGW.
 if [ -n "$CEPH_EXTRA_CONF" ]; then
-    echo "$CEPH_EXTRA_CONF" >> /etc/ceph/ceph.conf
+    printf '\n[global]\n%s\n' "$CEPH_EXTRA_CONF" >> "$CONF_NEW"
 fi
 if ls /etc/ceph/ceph.conf.d/*.conf 1>/dev/null 2>&1; then
     for f in /etc/ceph/ceph.conf.d/*.conf; do
-        cat "$f" >> /etc/ceph/ceph.conf
+        printf '\n[global]\n' >> "$CONF_NEW"
+        cat "$f" >> "$CONF_NEW"
     done
 fi
+chown ceph: "$CONF_NEW"
+mv -f "$CONF_NEW" /etc/ceph/ceph.conf
 
 if [ "$FRESH" = "1" ]; then
     # --- mkfs mon, then mkfs osd against the running mon so it registers ---
@@ -158,6 +171,26 @@ if [ -n "$CEPH_DEVICE_CLASS" ]; then
         ceph osd crush rm-device-class "osd.${osd}" >/dev/null 2>&1 || true
         ceph osd crush set-device-class "$CEPH_DEVICE_CLASS" "osd.${osd}"
     done
+fi
+
+# --- Create an RBD pool ---
+# Runs on every start, so it also applies to an existing (persisted) cluster:
+# pool create succeeds if the pool exists and rbd pool init is idempotent.
+# rbd pool init writes objects into the pool, so it blocks until the OSD is up
+# and the pool's PGs are active: each attempt is capped and retried until a
+# deadline, then the container fails with the last error.
+if [ -n "$CEPH_RBD_POOL" ]; then
+    echo "Creating RBD pool ${CEPH_RBD_POOL}..."
+    RBD_DEADLINE=$((SECONDS + 300))
+    until RBD_ERR=$( { timeout 10 ceph osd pool create "$CEPH_RBD_POOL" >/dev/null \
+            && timeout 10 rbd pool init "$CEPH_RBD_POOL"; } 2>&1 ); do
+        if [ "$SECONDS" -ge "$RBD_DEADLINE" ]; then
+            echo "FAILED: could not initialize RBD pool ${CEPH_RBD_POOL}: ${RBD_ERR}" >&2
+            exit 1
+        fi
+        sleep 1
+    done
+    echo "RBD pool ${CEPH_RBD_POOL} initialized."
 fi
 
 # --- Create a CephFS filesystem ---

@@ -75,6 +75,7 @@ jobs:
           docker run -d --name ceph-health-test \
             -e CEPH_DEMO_ACCESS_KEY=testkey \
             -e CEPH_DEMO_SECRET_KEY=testsecret \
+            -e CEPH_RBD_POOL=rbd \
             ${{ steps.meta.outputs.platform_image }}
 
           # wait_for <description> <command...>: retry until the command
@@ -101,6 +102,12 @@ jobs:
             'docker exec ceph-health-test ceph osd stat | grep -q " 1 up"'
           wait_for "S3 user" docker exec ceph-health-test \
             radosgw-admin user info --uid=demo
+          # `rbd ls` also succeeds on a pool rbd pool init never touched, so
+          # wait for startup to finish and check the pool is tagged for rbd.
+          wait_for "startup" sh -c \
+            'docker logs ceph-health-test 2>&1 | grep -q "=== ceph-test ready ==="'
+          wait_for "RBD pool" sh -c \
+            'docker exec ceph-health-test ceph osd pool application get rbd | grep -q "\"rbd\""'
 
           docker rm -f ceph-health-test
 

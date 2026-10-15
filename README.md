@@ -22,6 +22,8 @@ docker run -d --name ceph \
 
 Check status: `docker exec ceph ceph -s`
 
+The container logs `=== ceph-test ready ===` once every enabled setup step (S3 user, RBD pool, CephFS, dashboard, ...) has finished. Wait for that line, e.g. a testcontainers log wait strategy, rather than for `ceph health`.
+
 With the dashboard:
 
 ```bash
@@ -45,7 +47,7 @@ For a full dashboard playground (Prometheus + Grafana + Alertmanager, plus a mul
 | `CEPH_DEMO_UID` | `demo` | S3 user UID (created only if access key is set) |
 | `CEPH_DEMO_ACCESS_KEY` | (empty) | S3 access key. If set, creates an RGW user at startup |
 | `CEPH_DEMO_SECRET_KEY` | (empty) | S3 secret key |
-| `CEPH_EXTRA_CONF` | (empty) | Extra lines appended to `ceph.conf` before daemons start |
+| `CEPH_EXTRA_CONF` | (empty) | Extra lines appended to `ceph.conf` before daemons start. Lines before any section header go to `[global]` |
 | `CEPH_DASHBOARD` | `false` | Enable the Ceph mgr dashboard (plain HTTP, no SSL) |
 | `CEPH_DASHBOARD_PORT` | `8443` | Dashboard bind port |
 | `CEPH_DASHBOARD_USER` | `admin` | Dashboard admin username |
@@ -60,13 +62,16 @@ For a full dashboard playground (Prometheus + Grafana + Alertmanager, plus a mul
 | `CEPH_GRAFANA_API_URL` | (empty) | Grafana URL the mgr uses to verify embedded dashboards (e.g. `http://grafana:3000`). Setting it enables Grafana embedding |
 | `CEPH_GRAFANA_FRONTEND_API_URL` | (empty) | Grafana URL the browser uses for the iframe (e.g. `http://localhost:3000`). Falls back to `CEPH_GRAFANA_API_URL` |
 | `CEPH_DEVICE_CLASS` | (empty) | CRUSH device class to set on every OSD (e.g. `hdd`). If empty, OSDs keep no class and `ceph df detail` reports an empty `stats_by_class` |
+| `CEPH_RBD_POOL` | (empty) | Create a pool with this name and run `rbd pool init` on it at startup (e.g. `devpool`). The container exits non-zero if the pool cannot be initialized |
 | `CEPH_CEPHFS` | `false` | Create a CephFS filesystem and start an MDS for it |
 | `CEPH_CEPHFS_NAME` | `cephfs` | Filesystem name |
 | `CEPH_RGW_SEED` | `false` | Create a bucket with a few objects in RGW (owned by `CEPH_DEMO_UID`, which is created with generated keys if it does not exist) |
 | `CEPH_RGW_SEED_BUCKET` | `seed-bucket` | Seeded bucket name |
 | `CEPH_RGW_SEED_OBJECTS` | `5` | Number of small objects written into the seeded bucket |
 
-Files placed in `/etc/ceph/ceph.conf.d/*.conf` are also appended to `ceph.conf` at startup — handy for injecting RGW Keystone or other settings via volume mounts or testcontainers file injection.
+Files placed in `/etc/ceph/ceph.conf.d/*.conf` are also appended to `ceph.conf` at startup (also starting in `[global]`) — handy for injecting RGW Keystone or other settings via volume mounts or testcontainers file injection.
+
+Header-less lines go to `[global]`, so they apply to every daemon and to the `ceph` / `radosgw-admin` CLIs, and they override values the entrypoint sets with `ceph config set` (local `ceph.conf` wins over the mon config database). To target one daemon, start the snippet with its section, e.g. `[client.rgw.demo]` or `[osd]`.
 
 ## Orchestrator
 
@@ -122,7 +127,7 @@ docker run -d --name ceph -v ceph-data:/var/lib/ceph -p 8080:8080 ghcr.io/arttor
 
 > Use a **named volume** (as above), not a bind mount to a host path. On macOS, BlueStore `mkfs` fails on a Docker Desktop file share, so a bind mount for `/var/lib/ceph` does not work; named volumes live in the Docker VM and work fine.
 
-Mount `/etc/ceph` to share `ceph.conf` and keyrings with a client container.
+Mount `/etc/ceph` to share `ceph.conf` and keyrings with a client container. `ceph.conf` is regenerated on every start, so put settings in `CEPH_EXTRA_CONF` or `ceph.conf.d` rather than editing it.
 
 ## Extra Configuration
 

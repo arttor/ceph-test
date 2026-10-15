@@ -34,13 +34,16 @@ debug_osd = 0/0
 debug_bluestore = 0/0
 debug_rocksdb = 0/0
 debug_ms = 0/0
+# RGW settings live in [global], not [client.rgw.demo]: extra config is
+# appended under [global] (see entrypoint.sh) and a daemon's own section
+# outranks [global], so overrides of these would otherwise be ignored.
+rgw dns name = demo
+rgw frontends = beast endpoint=0.0.0.0:8080
 
 [osd.0]
 osd data = /var/lib/ceph/osd/ceph-0
 
 [client.rgw.demo]
-rgw dns name = demo
-rgw frontends = beast endpoint=0.0.0.0:8080
 keyring = /var/lib/ceph/radosgw/ceph-rgw.demo/keyring
 EOF
 
