@@ -81,14 +81,17 @@ jobs:
           # wait_for <description> <command...>: retry until the command
           # succeeds or WAIT_SECS pass. Each attempt is capped at 10s, since
           # ceph/radosgw-admin block forever when the cluster cannot serve them.
+          # The container exiting (the entrypoint fails on a daemon crash or a
+          # stuck setup step) ends the wait at once.
           WAIT_SECS=300
           wait_for() {
             local what=$1 start=$SECONDS
             shift
             echo "Waiting for ${what} (up to ${WAIT_SECS}s)..."
             until timeout 10 "$@" >/dev/null 2>&1; do
-              if [ $((SECONDS - start)) -ge "$WAIT_SECS" ]; then
-                echo "FAILED: ${what} not reached in ${WAIT_SECS}s"
+              if [ "$(docker inspect -f '{{.State.Running}}' ceph-health-test)" != true ] \
+                || [ $((SECONDS - start)) -ge "$WAIT_SECS" ]; then
+                echo "FAILED: ${what} not reached"
                 docker logs ceph-health-test
                 exit 1
               fi
@@ -97,17 +100,20 @@ jobs:
             echo "${what} ready at +$((SECONDS - start))s"
           }
 
-          wait_for "cluster health" docker exec ceph-health-test ceph health
+          # The image's HEALTHCHECK (mon, mgr, osd), then every enabled
+          # component (RGW, S3 user, RBD pool) as the entrypoint marks them.
+          wait_for "docker health" sh -c \
+            '[ "$(docker inspect -f "{{.State.Health.Status}}" ceph-health-test)" = healthy ]'
+          wait_for "setup complete" docker exec ceph-health-test ceph-test-health all
+
+          # Check the cluster directly too, not only the markers.
           wait_for "OSD up" sh -c \
             'docker exec ceph-health-test ceph osd stat | grep -q " 1 up"'
           wait_for "S3 user" docker exec ceph-health-test \
             radosgw-admin user info --uid=demo
-          # `rbd ls` also succeeds on a pool rbd pool init never touched, so
-          # wait for startup to finish and check the pool is tagged for rbd.
-          wait_for "startup" sh -c \
-            'docker logs ceph-health-test 2>&1 | grep -q "=== ceph-test ready ==="'
           wait_for "RBD pool" sh -c \
             'docker exec ceph-health-test ceph osd pool application get rbd | grep -q "\"rbd\""'
+          wait_for "RGW HTTP" docker exec ceph-health-test curl -s -o /dev/null http://127.0.0.1:8080
 
           docker rm -f ceph-health-test
 

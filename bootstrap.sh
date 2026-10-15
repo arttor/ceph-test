@@ -22,6 +22,11 @@ auth cluster required = cephx
 auth service required = cephx
 auth client required = cephx
 mon allow pool delete = true
+# The mon batches map updates (osdmap, mgrmap, ...) for this long after the
+# last one, so at the 1s default every pool create, application enable and
+# OSD boot step waits up to 1s; RGW's pool setup alone takes ~8 of them. A
+# single-mon test cluster has nothing to batch.
+paxos propose interval = 0.1
 mon max pg per osd = 500
 bluestore_block_size = 2147483648
 osd_memory_target = 939524096

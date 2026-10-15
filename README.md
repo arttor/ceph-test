@@ -22,7 +22,7 @@ docker run -d --name ceph \
 
 Check status: `docker exec ceph ceph -s`
 
-The container logs `=== ceph-test ready ===` once every enabled setup step (S3 user, RBD pool, CephFS, dashboard, ...) has finished. Wait for that line, e.g. a testcontainers log wait strategy, rather than for `ceph health`.
+The container is healthy, and logs `=== ceph-test ready ===`, once mon, mgr and osd are up. To wait for RGW or optional features, see [Readiness and Health](#readiness-and-health).
 
 With the dashboard:
 
@@ -44,6 +44,7 @@ For a full dashboard playground (Prometheus + Grafana + Alertmanager, plus a mul
 | `MON_IP` | `0.0.0.0` (auto-detect) | Monitor bind address |
 | `CEPH_PUBLIC_NETWORK` | `0.0.0.0/0` | Public network CIDR |
 | `CEPH_FSID` | (empty) | Use a specific fsid instead of a random one |
+| `CEPH_RGW` | `true` | Run RGW (S3 API on port 8080). `false` skips RGW and everything that needs it: the S3 user and the seed data |
 | `CEPH_DEMO_UID` | `demo` | S3 user UID (created only if access key is set) |
 | `CEPH_DEMO_ACCESS_KEY` | (empty) | S3 access key. If set, creates an RGW user at startup |
 | `CEPH_DEMO_SECRET_KEY` | (empty) | S3 secret key |
@@ -68,10 +69,39 @@ For a full dashboard playground (Prometheus + Grafana + Alertmanager, plus a mul
 | `CEPH_RGW_SEED` | `false` | Create a bucket with a few objects in RGW (owned by `CEPH_DEMO_UID`, which is created with generated keys if it does not exist) |
 | `CEPH_RGW_SEED_BUCKET` | `seed-bucket` | Seeded bucket name |
 | `CEPH_RGW_SEED_OBJECTS` | `5` | Number of small objects written into the seeded bucket |
+| `CEPH_WAIT_TIMEOUT` | `300` | Seconds each startup wait (a daemon coming up, a setup step) may take before the container fails. Raise it for very slow machines |
 
 Files placed in `/etc/ceph/ceph.conf.d/*.conf` are also appended to `ceph.conf` at startup (also starting in `[global]`) — handy for injecting RGW Keystone or other settings via volume mounts or testcontainers file injection.
 
 Header-less lines go to `[global]`, so they apply to every daemon and to the `ceph` / `radosgw-admin` CLIs, and they override values the entrypoint sets with `ceph config set` (local `ceph.conf` wins over the mon config database). To target one daemon, start the snippet with its section, e.g. `[client.rgw.demo]` or `[osd]`.
+
+## Readiness and Health
+
+The container turns healthy, and logs `=== ceph-test ready ===`, once mon, mgr and osd are up. That is all the default health check covers.
+
+RGW, CephFS and the other optional features become ready later. To wait for them, use `ceph-test-health <component...>`, which exits 0 once every named component is ready: `rgw` (on by default), `cephfs` (with `CEPH_CEPHFS=true`), or `all` for every enabled component. Components: `base`, `rgw`, `s3-user`, `rgw-seed`, `rbd`, `cephfs`, `device-class`, `orchestrator`, `prometheus`, `dashboard`, `all`.
+
+> Upgrading: `=== ceph-test ready ===` used to mean every setup step had finished. That is now `=== ceph-test setup complete ===` (or `ceph-test-health all`).
+
+With compose, override the healthcheck to wait for what your tests need:
+
+```yaml
+services:
+  ceph:
+    image: ghcr.io/arttor/ceph-test:v20
+    environment:
+      CEPH_CEPHFS: "true"
+    healthcheck:
+      test: ["CMD", "ceph-test-health", "rgw", "cephfs"]
+  tests:
+    depends_on:
+      ceph:
+        condition: service_healthy
+```
+
+With testcontainers-go: `wait.ForHealthCheck()`, or `wait.ForExec([]string{"ceph-test-health", "rgw"})`.
+
+If a daemon dies, or a startup step exceeds `CEPH_WAIT_TIMEOUT`, the container exits non-zero and logs the reason. In tests, `Terminate(ctx, testcontainers.StopTimeout(0))` skips the stop grace period.
 
 ## Orchestrator
 
