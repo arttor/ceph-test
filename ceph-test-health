@@ -4,9 +4,9 @@
 # logs its ready line, so this only reads the markers: no ceph command, which
 # could stall on a busy machine and flap the container's health.
 #
-# Components: base (mon, mgr, osd - the default, used by the Docker
-# HEALTHCHECK), rgw, s3-user, rgw-seed, device-class, rbd, cephfs,
-# orchestrator, prometheus, dashboard, all (every enabled component).
+# Components: base (mon, mgr, osd and its capacity reported - the default,
+# used by the Docker HEALTHCHECK), rgw, s3-user, rgw-seed, device-class, rbd,
+# cephfs, orchestrator, prometheus, dashboard, all (every enabled component).
 STATE_DIR=/run/ceph-test
 
 [ $# -eq 0 ] && set -- base

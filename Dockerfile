@@ -32,6 +32,6 @@ RUN chmod +x /opt/ceph-fast/entrypoint.sh /opt/ceph-fast/ceph-test-health \
 HEALTHCHECK --interval=5s --timeout=10s --start-period=10m --start-interval=1s --retries=3 \
     CMD ["ceph-test-health"]
 
-EXPOSE 3300 6789 8080 8443 9283
+EXPOSE 3300 8080 8443 9283
 
 ENTRYPOINT ["/opt/ceph-fast/entrypoint.sh"]

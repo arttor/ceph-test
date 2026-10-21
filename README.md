@@ -77,7 +77,7 @@ Header-less lines go to `[global]`, so they apply to every daemon and to the `ce
 
 The container turns healthy, and logs `=== ceph-test ready ===`, once mon, mgr and osd are up. That is all the default health check covers.
 
-RGW, CephFS and the other optional features become ready later. To wait for them, use `ceph-test-health <component...>`, which exits 0 once every named component is ready: `rgw` (on by default), `cephfs` (with `CEPH_CEPHFS=true`), or `all` for every enabled component. Components: `base`, `rgw`, `s3-user`, `rgw-seed`, `rbd`, `cephfs`, `device-class`, `orchestrator`, `prometheus`, `dashboard`, `all`.
+RGW, CephFS and the other optional features become ready later. To wait for them, use `ceph-test-health <component...>`, which exits 0 once every named component is ready: `rgw` (on by default), `cephfs` (with `CEPH_CEPHFS=true`), or `all` for every enabled component. Components: `base`, `rgw`, `s3-user`, `rgw-seed`, `rbd`, `cephfs`, `device-class`, `orchestrator`, `prometheus`, `dashboard`, `all`. Each component covers only itself, so name all you need, e.g. `ceph-test-health base rbd`.
 
 With compose, override the healthcheck to wait for what your tests need:
 
@@ -138,7 +138,6 @@ The format is the one `ceph test_orchestrator load_data` accepts: `inventory` (h
 | Port | Service |
 |---|---|
 | 3300 | Monitor (msgr2) |
-| 6789 | Monitor (msgr1) |
 | 8080 | RGW (S3 API) |
 | 8443 | Dashboard (only when `CEPH_DASHBOARD=true`) |
 | 9283 | Prometheus exporter (only when `CEPH_PROMETHEUS=true`) |

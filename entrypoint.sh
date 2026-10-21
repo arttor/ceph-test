@@ -412,13 +412,21 @@ mgr_available() {
 osd_up() {
     ceph osd stat -f json | grep -q '"num_up_osds":[1-9]'
 }
+# The mgr can drop the OSD's first stats report (it is not yet "in" in the
+# mgr's osdmap), and `ceph df` then reads 0 until the next one, ~5s later.
+# The mon's copy (ceph status, librados cluster stats) follows on the mgr's
+# next tick (~2s); waiting for it too would add that to every start.
+osd_stats() {
+    ceph df -f json | grep -q '"total_bytes": *[1-9]'
+}
 
-# --- Base readiness: mon, mgr and osd ---
+# --- Base readiness: mon, mgr and osd, with the OSD's stats in the mgr ---
 # The "ready" line and Docker health mean exactly this. RGW and the optional
 # features log and mark their own readiness (see ceph-test-health).
 step_base() {
     wait_for "mgr available" mgr_available
     wait_for "OSD up" osd_up
+    wait_for "OSD stats" osd_stats
     echo "=== ceph-test ready ==="
     mark_ready base
 }
