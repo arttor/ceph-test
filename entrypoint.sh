@@ -237,6 +237,14 @@ fi
 chown ceph: "$CONF_NEW"
 mv -f "$CONF_NEW" /etc/ceph/ceph.conf
 
+# The OSD size is set at mkfs; an existing cluster keeps it.
+if [ "$FRESH" = "0" ] \
+    && OSD_SIZE=$(stat -c %s /var/lib/ceph/osd/ceph-0/block) \
+    && CONF_SIZE=$(ceph-conf --show-config-value bluestore_block_size -n osd.0) \
+    && [ "$OSD_SIZE" != "$CONF_SIZE" ]; then
+    echo "WARNING: bluestore_block_size=${CONF_SIZE} ignored, the existing OSD keeps its size ${OSD_SIZE} (set at mkfs)" >&2
+fi
+
 # --- Start the mon ---
 # A fresh cluster gets every daemon's key through the mon's mkfs keyring, so
 # they are in its auth database from the start: no `ceph auth` round trips.
@@ -301,7 +309,10 @@ run_parallel() { # <function...>: run concurrently, fail if any fails
     fi
 }
 osd_prepare() {
-    truncate -s 2147483648 /var/lib/ceph/osd/ceph-0/block
+    # mkfs creates the block file (sparse) at bluestore_block_size from
+    # ceph.conf, but keeps the size of an existing one, e.g. left over from a
+    # failed start.
+    rm -f /var/lib/ceph/osd/ceph-0/block
     chown -R ceph: /var/lib/ceph/osd/ceph-0
     ceph-osd --conf /etc/ceph/ceph.conf --osd-data /var/lib/ceph/osd/ceph-0 --mkfs -i 0
     echo "bluestore" > /var/lib/ceph/osd/ceph-0/type

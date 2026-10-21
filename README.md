@@ -194,6 +194,16 @@ req := testcontainers.ContainerRequest{
 }
 ```
 
+### OSD size
+
+The OSD is a sparse 2 GiB file by default: space is allocated only as data is written. Set `bluestore_block_size` to change it:
+
+```bash
+docker run -d --name ceph -e 'CEPH_EXTRA_CONF=bluestore_block_size = 10G' ghcr.io/arttor/ceph-test:v20
+```
+
+Settings read at mkfs, such as `bluestore_block_size`, apply only on the first start. A cluster persisted in a `/var/lib/ceph` volume keeps its OSD size and logs a warning if the setting differs.
+
 ## Building
 
 ```bash

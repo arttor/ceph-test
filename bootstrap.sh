@@ -30,6 +30,12 @@ paxos propose interval = 0.1
 mon max pg per osd = 500
 bluestore_block_size = 2147483648
 osd_memory_target = 939524096
+# On first start the OSD benchmarks its IOPS for mClock by writing 100 4 MiB
+# objects. Until they are deleted the 400 MiB count as used, so pool capacity
+# (ceph df max_avail) reads ~25% low for a few seconds after the container is
+# ready. On typical hosts the result is discarded anyway: the block file is
+# detected as rotational and the measured IOPS fall outside the hdd range.
+osd_mclock_skip_benchmark = true
 osd_scrub_auto_repair = false
 osd_scrub_begin_hour = 0
 osd_scrub_end_hour = 0
